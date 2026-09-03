@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, DirectoryTree, Input, Label, Static
+from textual.widgets import Button, DirectoryTree, Input, Label, Static, TextArea
 
+from devdesk.config.schema import ConfigError, validate_project_config
 from devdesk.core.project_manager import ProjectManager
 from devdesk.models.project import Project
 from devdesk.utils.paths import project_config_path
@@ -98,37 +100,87 @@ class ProjectSwitcherScreen(ModalScreen[str | None]):
         self.dismiss(event.value.strip() or None)
 
 
-class ProjectConfigScreen(ModalScreen[None]):
-    BINDINGS = [("escape", "close", "Close")]
+
+class ProjectConfigScreen(ModalScreen[bool]):
+    BINDINGS = [
+        ("escape", "cancel", "Cancel"),
+        ("ctrl+s", "save", "Save"),
+    ]
 
     def __init__(self, project: Project | None) -> None:
         super().__init__()
         self.project = project
+        self._config_path: Path | None = None
+        self._initial_content: str = ""
 
     def compose(self) -> ComposeResult:
-        with Vertical():
-            yield Label("Configure Project")
+        with Vertical(id="project-config-modal"):
+            yield Label("Configure Project (.devdesk/config.toml)", classes="modal-title")
             if self.project is None:
                 yield Static("No project loaded. Open a project first.", classes="muted")
-            else:
-                config = project_config_path(self.project.path)
-                yield Static(f"Name: {self.project.name}")
-                yield Static(f"Path: {self.project.path}")
-                yield Static(f"Config: {config}")
-                yield Static("Services:", classes="muted")
-                for service in self.project.services:
-                    port = f"  port {service.port}" if service.port else ""
-                    cmd = " ".join(service.command)
-                    yield Static(f"  {service.name}: {cmd}  ({service.directory}){port}")
-                yield Static(
-                    "Edit .devdesk/config.toml in this project, then reopen it to apply changes.",
-                    classes="muted",
-                )
-            yield Button("Close", id="close", variant="primary")
+                yield Button("Close", id="cancel", variant="primary")
+                return
 
-    def action_close(self) -> None:
-        self.dismiss(None)
+            self._config_path = project_config_path(self.project.path)
+            yield Static(f"Project: {self.project.name}  ·  {self._config_path}", classes="muted")
+
+            if self._config_path.is_file():
+                try:
+                    self._initial_content = self._config_path.read_text(encoding="utf-8")
+                except Exception as exc:
+                    self._initial_content = f"# Error reading {self._config_path}: {exc}"
+            else:
+                self._initial_content = (
+                    f'[project]\nname = "{self.project.name}"\n\n'
+                    "# Example services:\n"
+                    '# [services.backend]\n# command = ["python", "app.py"]\n# directory = "."\n# port = 8000\n'
+                )
+
+            yield TextArea(self._initial_content, language="toml", id="config-editor")
+            with Horizontal(id="config-actions"):
+                yield Button("Save & Reload", id="save", variant="primary")
+                yield Button("Cancel", id="cancel")
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+    def action_save(self) -> None:
+        self._do_save()
+
+    def _do_save(self) -> None:
+        if self.project is None or self._config_path is None:
+            self.dismiss(False)
+            return
+
+        editor = self.query_one("#config-editor", TextArea)
+        new_content = editor.text
+
+        # 1. Validate TOML syntax
+        try:
+            raw_data = tomllib.loads(new_content)
+        except tomllib.TOMLDecodeError as exc:
+            self.notify(f"Invalid TOML: {exc}", severity="error")
+            return
+
+        # 2. Validate DevDesk schema
+        try:
+            validate_project_config(raw_data)
+        except Exception as exc:
+            self.notify(f"Config error: {exc}", severity="error")
+            return
+
+        # 3. Save to disk
+        try:
+            self._config_path.parent.mkdir(parents=True, exist_ok=True)
+            self._config_path.write_text(new_content, encoding="utf-8")
+        except Exception as exc:
+            self.notify(f"Failed to save file: {exc}", severity="error")
+            return
+
+        self.dismiss(True)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "close":
-            self.dismiss(None)
+        if event.button.id == "save":
+            self._do_save()
+        elif event.button.id == "cancel":
+            self.dismiss(False)

@@ -264,7 +264,13 @@ class DevDeskApp(App[None]):
         elif command == "switch_project":
             self._open_switcher()
         elif command == "configure_project":
-            self.push_screen(ProjectConfigScreen(self.project_manager.current))
+            if self.project_manager.current:
+                self.push_screen(
+                    ProjectConfigScreen(self.project_manager.current),
+                    self._after_project_configured,
+                )
+            else:
+                self.notify("Open a project first.")
         elif command == "settings":
             self._open_settings()
         elif command == "exit":
@@ -327,6 +333,30 @@ class DevDeskApp(App[None]):
             else:
                 await self.service_manager.start_configured()
             self.notify(f"Loaded {project.name}")
+        except Exception as exc:  # noqa: BLE001
+            self.notify(describe_open_error(exc), severity="error")
+
+    def _after_project_configured(self, reloaded: bool | None) -> None:
+        if not reloaded:
+            return
+        self._reload_current_project()
+
+    def _reload_current_project(self) -> None:
+        current = self.project_manager.current
+        if current is None:
+            return
+        try:
+            old_services = {s.name: s for s in self.service_manager.services()}
+            project = self.project_manager.open(current.path)
+            for s in project.services:
+                old = old_services.get(s.name)
+                if old and (old.is_active or self.service_manager.processes.is_running(s.name)):
+                    s.state = old.state
+                    s.pid = old.pid
+                    s.started_at = old.started_at
+            self.service_manager.attach_project(project)
+            self._sync_project_ui()
+            self.notify(f"Reloaded {project.name} configuration")
         except Exception as exc:  # noqa: BLE001
             self.notify(describe_open_error(exc), severity="error")
 

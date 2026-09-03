@@ -237,3 +237,31 @@ ModalScreen > Vertical {
 .recent-path {
     width: 100%;
 }
+
+#project-config-modal {
+    width: 96;
+    max-width: 95%;
+    height: auto;
+    max-height: 90%;
+}
+
+#config-editor {
+    height: 18;
+    margin: 1 0;
+    border: solid #2a3540;
+}
+
+#config-editor:focus {
+    border: solid #3d6f9c;
+}
+
+#config-actions {
+    height: auto;
+    margin-top: 1;
+}
+
+.modal-title {
+    text-style: bold;
+    color: #e8eef4;
+}
+
