@@ -1,0 +1,187 @@
+Screen {
+    background: #0e1318;
+    color: #c5ced6;
+}
+
+#chrome {
+    height: 3;
+    background: #141b22;
+    border-bottom: solid #2a3540;
+    padding: 0 1;
+}
+
+#chrome-title {
+    text-style: bold;
+    color: #e8eef4;
+    width: 1fr;
+}
+
+#chrome-status {
+    width: auto;
+    text-style: bold;
+    content-align: right middle;
+}
+
+#body {
+    height: 1fr;
+}
+
+#sidebar {
+    width: 22;
+    min-width: 16;
+    background: #12181f;
+    border-right: solid #2a3540;
+    padding: 1 0;
+}
+
+.nav-section {
+    color: #6d7a86;
+    text-style: bold;
+    padding: 1 2 0 2;
+    height: auto;
+}
+
+.nav-item {
+    padding: 0 2;
+    height: 1;
+}
+
+.nav-item.--selected {
+    background: #1d3f66;
+    color: #f2f6fa;
+    text-style: bold;
+}
+
+.nav-item.--selected .nav-marker {
+    color: #7ec8ff;
+}
+
+#main {
+    width: 1fr;
+    height: 1fr;
+}
+
+.log-panel {
+    height: 1fr;
+    border: solid #2a3540;
+    background: #0e1318;
+}
+
+.log-panel:focus {
+    border: solid #3d6f9c;
+}
+
+.service-header {
+    height: 1;
+    padding: 0 1;
+    background: #141b22;
+}
+
+.service-header-title {
+    width: 1fr;
+    text-style: bold;
+    color: #d7dee5;
+}
+
+.service-header-status {
+    width: auto;
+    content-align: right middle;
+}
+
+.log-body {
+    height: 1fr;
+    padding: 0 1;
+    scrollbar-background: #12181f;
+    scrollbar-color: #3d4c5a;
+}
+
+#status-bar {
+    height: 1;
+    background: #141b22;
+    border-top: solid #2a3540;
+    padding: 0 1;
+    color: #9aa6b2;
+}
+
+.status-running {
+    color: #3dd68c;
+}
+
+.status-starting {
+    color: #f0c14b;
+}
+
+.status-stopping {
+    color: #f0c14b;
+}
+
+.status-stopped {
+    color: #6d7a86;
+}
+
+.status-failed {
+    color: #ff6b6b;
+}
+
+.status-unknown {
+    color: #9aa6b2;
+}
+
+#empty-state {
+    width: 1fr;
+    height: 1fr;
+    content-align: center middle;
+    color: #6d7a86;
+    text-align: center;
+}
+
+DataTable {
+    height: 1fr;
+}
+
+Input {
+    background: #141b22;
+    border: solid #2a3540;
+}
+
+Input:focus {
+    border: solid #3d6f9c;
+}
+
+Button {
+    margin-right: 1;
+}
+
+.muted {
+    color: #6d7a86;
+}
+
+.error-title {
+    color: #ff6b6b;
+    text-style: bold;
+}
+
+ModalScreen {
+    align: center middle;
+    background: #000000 60%;
+}
+
+ModalScreen > Vertical {
+    width: 88;
+    max-width: 100%;
+    height: auto;
+    max-height: 90%;
+    background: #141b22;
+    border: solid #3d6f9c;
+    padding: 1 2;
+    overflow-y: auto;
+}
+
+#tree {
+    height: 14;
+    border: solid #2a3540;
+}
+
+.recent-path {
+    width: 100%;
+}

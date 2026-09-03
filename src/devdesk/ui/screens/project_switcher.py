@@ -1,0 +1,134 @@
+"""Open, recall, and discover projects. Also shows current project configuration."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from textual.app import ComposeResult
+from textual.containers import Horizontal, Vertical
+from textual.screen import ModalScreen
+from textual.widgets import Button, DirectoryTree, Input, Label, Static
+
+from devdesk.core.project_manager import ProjectManager
+from devdesk.models.project import Project
+from devdesk.utils.paths import project_config_path
+
+
+class ProjectSwitcherScreen(ModalScreen[str | None]):
+    BINDINGS = [("escape", "cancel", "Close")]
+
+    def __init__(self, manager: ProjectManager, start: Path) -> None:
+        super().__init__()
+        self.manager = manager
+        self.start = start if start.exists() else Path.home()
+        self._recent_index: dict[str, Path] = {}
+        self._discovered: dict[str, Path] = {}
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="switcher"):
+            yield Label("Open Project")
+            yield Input(str(self.start), placeholder="Path to a project directory", id="project-path")
+            with Horizontal():
+                yield Button("Open", id="open", variant="primary")
+                yield Button("Discover here", id="discover")
+                yield Button("Cancel", id="cancel")
+            yield Label("Recent Projects")
+            recent = self.manager.recent
+            if recent:
+                for index, path in enumerate(recent):
+                    key = f"recent-{index}"
+                    self._recent_index[key] = path
+                    yield Button(str(path), id=key, classes="recent-path")
+            else:
+                yield Static("No recent projects.", classes="muted")
+            yield Label("Browse")
+            yield DirectoryTree(str(self.start), id="tree")
+            yield Label("Discovered", id="discovered-label")
+            yield Static("Use Discover here to list projects under the path.", id="discovered", classes="muted")
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        button_id = event.button.id or ""
+        if button_id == "cancel":
+            self.dismiss(None)
+            return
+        if button_id == "open":
+            self.dismiss(self.query_one("#project-path", Input).value.strip() or None)
+            return
+        if button_id == "discover":
+            root = Path(self.query_one("#project-path", Input).value.strip() or str(self.start))
+            found = self.manager.discover(root)
+            box = self.query_one("#discovered", Static)
+            if not found:
+                self._discovered.clear()
+                box.update(f"No .devdesk/config.toml under {root}")
+                self.notify(f"No .devdesk/config.toml under {root}")
+                return
+            if len(found) == 1:
+                self.dismiss(str(found[0]))
+                return
+            self._discovered = {f"found-{index}": path for index, path in enumerate(found)}
+            listing = "\n".join(f"  {index + 1}. {path}" for index, path in enumerate(found))
+            box.update(f"{len(found)} projects found. Open one by number in the path field, or click Open after pasting a path.\n{listing}")
+            self.query_one("#project-path", Input).value = str(found[0])
+            self.notify(f"Found {len(found)} projects. Path set to the first; edit or Open.")
+            return
+        if button_id in self._recent_index:
+            self.dismiss(str(self._recent_index[button_id]))
+            return
+        if button_id in self._discovered:
+            self.dismiss(str(self._discovered[button_id]))
+
+    def on_directory_tree_directory_selected(self, event: DirectoryTree.DirectorySelected) -> None:
+        path = Path(event.path)
+        self.query_one("#project-path", Input).value = str(path)
+        if project_config_path(path).is_file():
+            self.notify(f"DevDesk config found in {path.name}")
+
+    def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
+        path = Path(event.path)
+        if path.name == "config.toml" and path.parent.name == ".devdesk":
+            self.dismiss(str(path.parent.parent))
+            return
+        self.query_one("#project-path", Input).value = str(path.parent)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.dismiss(event.value.strip() or None)
+
+
+class ProjectConfigScreen(ModalScreen[None]):
+    BINDINGS = [("escape", "close", "Close")]
+
+    def __init__(self, project: Project | None) -> None:
+        super().__init__()
+        self.project = project
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Label("Configure Project")
+            if self.project is None:
+                yield Static("No project loaded. Open a project first.", classes="muted")
+            else:
+                config = project_config_path(self.project.path)
+                yield Static(f"Name: {self.project.name}")
+                yield Static(f"Path: {self.project.path}")
+                yield Static(f"Config: {config}")
+                yield Static("Services:", classes="muted")
+                for service in self.project.services:
+                    port = f"  port {service.port}" if service.port else ""
+                    cmd = " ".join(service.command)
+                    yield Static(f"  {service.name}: {cmd}  ({service.directory}){port}")
+                yield Static(
+                    "Edit .devdesk/config.toml in this project, then reopen it to apply changes.",
+                    classes="muted",
+                )
+            yield Button("Close", id="close", variant="primary")
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "close":
+            self.dismiss(None)
