@@ -45,6 +45,7 @@ class ApiMonitorView(Vertical):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._rows: dict[object, ApiRequest] = {}
+        self._table: DataTable | None = None
 
     def compose(self):
         yield Static(
@@ -54,12 +55,18 @@ class ApiMonitorView(Vertical):
         yield DataTable(id="api-table", cursor_type="row", zebra_stripes=True)
 
     def on_mount(self) -> None:
-        table = self.query_one("#api-table", DataTable)
-        table.add_columns("TIME", "SERVICE", "METHOD", "ENDPOINT", "STATUS", "DURATION")
-        self._rows: dict[object, ApiRequest] = {}
+        self._table = self.query_one("#api-table", DataTable)
+        self._table.add_columns("TIME", "SERVICE", "METHOD", "ENDPOINT", "STATUS", "DURATION")
+        self._rows = {}
+
+    @property
+    def table_widget(self) -> DataTable:
+        if self._table is None:
+            self._table = self.query_one("#api-table", DataTable)
+        return self._table
 
     def replace_rows(self, requests: list[ApiRequest]) -> None:
-        table = self.query_one("#api-table", DataTable)
+        table = self.table_widget
         table.clear()
         self._rows = {}
         for item in reversed(requests[-200:]):

@@ -33,3 +33,12 @@ class ServiceFailed(Message):
         super().__init__()
         self.service = service
         self.reason = reason
+
+
+class ServiceAction(Message):
+    """A control action (start/stop/restart) for a specific service."""
+
+    def __init__(self, service_name: str, action: str) -> None:
+        super().__init__()
+        self.service_name = service_name
+        self.action = action

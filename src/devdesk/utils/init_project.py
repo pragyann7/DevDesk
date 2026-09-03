@@ -5,7 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def init_project(root: Path) -> Path:
+import sys
+
+def init_project(root: Path) -> tuple[Path, list[str]]:
     """Create .devdesk/config.toml in the given directory if it doesn't exist."""
     devdesk_dir = root / ".devdesk"
     config_file = devdesk_dir / "config.toml"
@@ -18,7 +20,7 @@ def init_project(root: Path) -> Path:
     project_name = root.resolve().name
     sections = [f'[project]\nname = "{project_name}"\n']
 
-    # 1. Look for Backend (Django / Python)
+    # 1. Look for Backend (Django / Python / Node)
     backend_info = _detect_backend(root)
     if backend_info:
         sections.append(_build_backend_section(backend_info))
@@ -37,7 +39,7 @@ def init_project(root: Path) -> Path:
     # Final warnings/tips for the user
     messages = [f"Initialized DevDesk project at {config_file}"]
 
-    if backend_info and "python" in backend_info["cmd"] and "bin" not in backend_info["cmd"]:
+    if backend_info and "bin" not in backend_info["cmd"] and "Scripts" not in backend_info["cmd"] and "python" in backend_info["cmd"]:
         messages.append("  [!] No virtual environment (.venv/venv) detected. Using system 'python'.")
         messages.append("      Recommendation: Create a venv for better isolation.")
 
@@ -49,11 +51,11 @@ def _detect_backend(root: Path) -> dict[str, str] | None:
     candidates = [root] + [d for d in root.iterdir() if d.is_dir() and not d.name.startswith(".")]
 
     for path in candidates:
+        rel = path.relative_to(root)
+        python_bin = _find_python_in_venv(path, root) or "python"
+
         # 1. Django
         if (path / "manage.py").is_file():
-            rel = path.relative_to(root)
-            venv = _find_venv(path, root)
-            python_bin = f"{venv}/python" if venv else "python"
             return {
                 "name": "backend",
                 "dir": "." if rel == Path(".") else str(rel),
@@ -61,18 +63,11 @@ def _detect_backend(root: Path) -> dict[str, str] | None:
                 "port": "8000"
             }
 
-        # 2. FastAPI / Flask / Generic Python
-        # Look for main.py or app.py
+        # 2. FastAPI / Flask
         for entry in ("main.py", "app.py", "server.py"):
-            file_path = path / entry
-            if file_path.is_file():
-                content = file_path.read_text(errors="replace")
-                rel = path.relative_to(root)
-                venv = _find_venv(path, root)
-                python_bin = f"{venv}/python" if venv else "python"
-
+            if (path / entry).is_file():
+                content = (path / entry).read_text(errors="replace")
                 if "FastAPI" in content:
-                    # Likely FastAPI
                     app_name = "main:app" if entry == "main.py" else f"{entry[:-3]}:app"
                     return {
                         "name": "api",
@@ -81,7 +76,6 @@ def _detect_backend(root: Path) -> dict[str, str] | None:
                         "port": "8000"
                     }
                 elif "Flask" in content:
-                    # Likely Flask
                     return {
                         "name": "backend",
                         "dir": "." if rel == Path(".") else str(rel),
@@ -89,26 +83,15 @@ def _detect_backend(root: Path) -> dict[str, str] | None:
                         "port": "5000"
                     }
 
-        # 3. Node.js Backend (if not already picked up by frontend detector)
+        # 3. Node.js Backend
         if (path / "package.json").is_file():
-            # Check for backend indicators in package.json
             import json
             try:
                 with (path / "package.json").open("r") as f:
                     pkg = json.load(f)
-
                 deps = pkg.get("dependencies", {})
-                dev_deps = pkg.get("devDependencies", {})
-                scripts = pkg.get("scripts", {})
-
-                is_backend = any(k in deps for k in ("express", "koa", "nest", "fastify", "hapi"))
-
-                if is_backend:
-                    rel = path.relative_to(root)
-                    cmd = '["npm", "start"]'
-                    if "dev" in scripts:
-                        cmd = '["npm", "run", "dev"]'
-
+                if any(k in deps for k in ("express", "koa", "nest", "fastify", "hapi")):
+                    cmd = '["npm", "run", "dev"]' if "dev" in pkg.get("scripts", {}) else '["npm", "start"]'
                     return {
                         "name": "backend",
                         "dir": "." if rel == Path(".") else str(rel),
@@ -117,7 +100,6 @@ def _detect_backend(root: Path) -> dict[str, str] | None:
                     }
             except Exception:
                 pass
-
     return None
 
 
@@ -126,46 +108,52 @@ def _detect_frontend(root: Path) -> dict[str, str] | None:
     candidates = [root] + [d for d in root.iterdir() if d.is_dir() and not d.name.startswith(".")]
 
     for path in candidates:
-        if path.name in ("venv", "env", "node_modules"):
-            continue
-
+        if path.name in ("venv", "env", "node_modules"): continue
         if (path / "package.json").is_file():
             import json
             try:
                 with (path / "package.json").open("r") as f:
                     pkg = json.load(f)
-
                 deps = pkg.get("dependencies", {})
-                # If it has react, vue, svelte, next, nuxt, it's definitely frontend
+                dev_deps = pkg.get("devDependencies", {})
                 is_frontend = any(k in deps for k in ("react", "vue", "svelte", "next", "nuxt", "@angular/core"))
 
-                # If it's NOT explicitly a backend-heavy node project, assume it's frontend
-                # (or if it's in a folder named 'frontend', 'web', 'ui')
+                # Check for Vite to use correct default port
+                port = "5173" if "vite" in deps or "vite" in dev_deps else "3000"
+
                 if is_frontend or path.name.lower() in ("frontend", "web", "ui", "client"):
                     rel = path.relative_to(root)
+                    cmd = '["npm", "run", "dev"]' if "dev" in pkg.get("scripts", {}) else '["npm", "start"]'
                     return {
                         "name": "frontend",
                         "dir": "." if rel == Path(".") else str(rel),
-                        "cmd": '["npm", "run", "dev"]' if "dev" in pkg.get("scripts", {}) else '["npm", "start"]',
-                        "port": "3000"
+                        "cmd": cmd,
+                        "port": port
                     }
             except Exception:
                 pass
-
     return None
 
 
-def _find_venv(base: Path, root: Path) -> str | None:
-    """Look for .venv or venv in base or parent."""
+def _find_python_in_venv(base: Path, root: Path) -> str | None:
+    """Look for python in .venv or venv, returning path relative to the service directory (base)."""
+    bin_dir = "Scripts" if sys.platform == "win32" else "bin"
+    exe_name = "python.exe" if sys.platform == "win32" else "python"
+
     for name in (".venv", "venv", "env"):
-        # Check inside the service folder
-        if (base / name).is_dir():
-            return f"./{name}/bin" if base == root else f"./{base.name}/{name}/bin"
-        # Check in the root workspace
-        if (root / name).is_dir():
+        # 1. Check in the service directory (e.g. backend/.venv)
+        check_path = base / name / bin_dir / exe_name
+        if check_path.is_file():
+            return f"./{name}/{bin_dir}/{exe_name}"
+
+        # 2. Check in the project root (common for shared venv)
+        check_path = root / name / bin_dir / exe_name
+        if check_path.is_file():
             if base == root:
-                return f"./{name}/bin"
-            return f"../{name}/bin"
+                return f"./{name}/{bin_dir}/{exe_name}"
+            # Need to go up from base to root
+            return f"../{name}/{bin_dir}/{exe_name}"
+
     return None
 
 
@@ -174,7 +162,7 @@ def _build_backend_section(info: dict[str, str]) -> str:
 command = {info['cmd']}
 directory = "{info['dir']}"
 port = {info['port']}
-auto_start = true
+auto_start = false
 """
 
 

@@ -19,12 +19,19 @@ from devdesk.core.process_manager import StreamName
 from devdesk.core.project_manager import ProjectManager, describe_open_error
 from devdesk.core.service_manager import ServiceManager
 from devdesk.models.service import Service, ServiceState
-from devdesk.ui import LogArrived, ServiceFailed, ServiceStateChanged, SidebarCommand
+from devdesk.ui import (
+    LogArrived,
+    ServiceAction,
+    ServiceFailed,
+    ServiceStateChanged,
+    SidebarCommand,
+)
 from devdesk.ui.screens.api_monitor import ApiMonitorView
 from devdesk.ui.screens.backend import BackendView
 from devdesk.ui.screens.dashboard import DashboardView
 from devdesk.ui.screens.frontend import FrontendView
 from devdesk.ui.screens.project_switcher import ProjectConfigScreen, ProjectSwitcherScreen
+from devdesk.ui.screens.service_view import ServiceView
 from devdesk.ui.screens.settings import SettingsScreen
 from devdesk.ui.widgets.log_panel import LogPanel
 from devdesk.ui.widgets.sidebar import Sidebar
@@ -130,6 +137,7 @@ class DevDeskApp(App[None]):
         self.api_monitor = ApiMonitor()
         self.current_view = "dashboard"
         self._dashboard_offset = 0
+        self._pending_log_events: list[LogEvent] = []
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="chrome"):
@@ -143,6 +151,7 @@ class DevDeskApp(App[None]):
                 yield DashboardView(id="dashboard")
                 yield BackendView(id="backend")
                 yield FrontendView(id="frontend")
+                yield ServiceView(id="service_view")
                 yield ApiMonitorView(id="api_monitor")
         yield StatusBar()
 
@@ -153,6 +162,7 @@ class DevDeskApp(App[None]):
             on_error=self._on_service_error,
         )
         self.set_interval(1.0, self._refresh_status)
+        self.set_interval(0.04, self._flush_pending_logs)
         self._open_initial_project()
         self._sync_project_ui()
 
@@ -181,8 +191,28 @@ class DevDeskApp(App[None]):
         timestamp: datetime,
     ) -> None:
         event = LogEvent(timestamp=timestamp, service=name, stream=stream, message=line)
-        self.api_monitor.ingest_log(event)
-        self.post_message(LogArrived(event))
+        self._pending_log_events.append(event)
+
+    def _flush_pending_logs(self) -> None:
+        if not self._pending_log_events:
+            return
+        events = self._pending_log_events
+        self._pending_log_events = []
+
+        new_api_request = False
+        events_by_service: dict[str, list[LogEvent]] = {}
+        for event in events:
+            if self.api_monitor.ingest_log(event) is not None:
+                new_api_request = True
+            events_by_service.setdefault(event.service, []).append(event)
+
+        visible_panels = self._get_visible_log_panels()
+        for panel in visible_panels:
+            if panel.service_name and panel.service_name in events_by_service:
+                panel.append_events(events_by_service[panel.service_name])
+
+        if self.current_view == "api_monitor" and new_api_request:
+            self.query_one(ApiMonitorView).replace_rows(self.api_monitor.requests())
 
     def _on_service_state(self, service: Service) -> None:
         self.post_message(ServiceStateChanged(service))
@@ -191,10 +221,7 @@ class DevDeskApp(App[None]):
         self.post_message(ServiceFailed(service, reason))
 
     def on_log_arrived(self, message: LogArrived) -> None:
-        for panel in self.query(LogPanel):
-            panel.append_event(message.event)
-        if self.current_view == "api_monitor":
-            self.query_one(ApiMonitorView).replace_rows(self.api_monitor.requests())
+        self._pending_log_events.append(message.event)
 
     def on_service_state_changed(self, message: ServiceStateChanged) -> None:
         self._refresh_headers()
@@ -208,10 +235,25 @@ class DevDeskApp(App[None]):
         )
         self.push_screen(ErrorModal(message.service, message.reason, details))
 
+    def on_service_action(self, message: ServiceAction) -> None:
+        service = self.service_manager.get(message.service_name)
+        if not service:
+            return
+        if message.action == "start":
+            self.run_worker(self.service_manager.start(service))
+        elif message.action == "stop":
+            self.run_worker(self.service_manager.stop(service))
+        elif message.action == "restart":
+            self.run_worker(self.service_manager.restart(service))
+
     def on_sidebar_command(self, message: SidebarCommand) -> None:
         command = message.command
         if command in {"dashboard", "backend", "frontend", "api_monitor"}:
             self._show_view(command)
+            return
+        if command.startswith("svc-"):
+            service_name = command.removeprefix("svc-")
+            self._show_service(service_name)
             return
         if command == "start_all":
             self.action_start_all()
@@ -234,6 +276,29 @@ class DevDeskApp(App[None]):
         self.query_one(Sidebar).highlight(name)
         if name == "api_monitor":
             self.query_one(ApiMonitorView).replace_rows(self.api_monitor.requests())
+        self._reload_visible_logs()
+
+    def _show_service(self, name: str) -> None:
+        service = self.service_manager.get(name)
+        if not service:
+            return
+
+        # If it's the primary frontend/backend, show that view for legacy support
+        project = self.project_manager.current
+        if project:
+            top, bottom = project.display_pair(0)
+            if top and top.name == name:
+                self._show_view("frontend")
+                return
+            if bottom and bottom.name == name:
+                self._show_view("backend")
+                return
+
+        view = self.query_one(ServiceView)
+        view.bind_service(service)
+        self.current_view = f"svc-{name}"
+        self.query_one("#main", ContentSwitcher).current = "service_view"
+        self.query_one(Sidebar).highlight(f"svc-{name}")
         self._reload_visible_logs()
 
     def _open_switcher(self) -> None:
@@ -276,44 +341,75 @@ class DevDeskApp(App[None]):
         save_settings(settings)
         for panel in self.query(LogPanel):
             panel.set_follow(settings.auto_follow_logs)
+            panel.set_max_lines(settings.log_buffer_size)
         self.notify("Settings saved")
 
     def _sync_project_ui(self) -> None:
         project = self.project_manager.current
+        self.query_one(Sidebar).bind_project(project)
         dashboard = self.query_one(DashboardView)
         dashboard.bind_project(project, offset=self._dashboard_offset)
         top, bottom = (None, None) if project is None else project.display_pair(self._dashboard_offset)
         self.query_one(FrontendView).bind_service(top)
         self.query_one(BackendView).bind_service(bottom)
+
+        # Update ServiceView if active
+        if self.current_view.startswith("svc-"):
+            svc_name = self.current_view.removeprefix("svc-")
+            services = {s.name: s for s in self.service_manager.services()}
+            self.query_one(ServiceView).bind_service(services.get(svc_name))
+
         for panel in self.query(LogPanel):
             panel.set_follow(self.settings.auto_follow_logs)
+            panel.set_max_lines(self.settings.log_buffer_size)
             panel.clear_view()
-            if panel.service_name:
-                panel.load_events(self.log_manager.get(panel.service_name))
+
+        self._reload_visible_logs()
         self._refresh_headers()
         self._refresh_status()
 
+    def _get_visible_log_panels(self) -> list[LogPanel]:
+        try:
+            switcher = self.query_one("#main", ContentSwitcher)
+            current_id = switcher.current
+            if not current_id:
+                return []
+            current_view = self.query_one(f"#{current_id}")
+            return [panel for panel in current_view.query(LogPanel) if panel.display]
+        except Exception:
+            return []
+
     def _reload_visible_logs(self) -> None:
-        for panel in self.query(LogPanel):
-            if panel.display and panel.service_name:
+        for panel in self._get_visible_log_panels():
+            if panel.service_name:
                 panel.load_events(self.log_manager.get(panel.service_name))
 
     def _refresh_headers(self) -> None:
         project = self.project_manager.current
         services = {item.name: item for item in self.service_manager.services()}
-        for panel in self.query(LogPanel):
+        for panel in self._get_visible_log_panels():
             if panel.service_name and panel.service_name in services:
                 panel.set_service(services[panel.service_name])
         top, bottom = (None, None) if project is None else project.display_pair(self._dashboard_offset)
         self.query_one(FrontendView).bind_service(top)
         self.query_one(BackendView).bind_service(bottom)
 
+        # Update ServiceView if active
+        if self.current_view.startswith("svc-"):
+            svc_name = self.current_view.removeprefix("svc-")
+            services = {s.name: s for s in self.service_manager.services()}
+            self.query_one(ServiceView).bind_service(services.get(svc_name))
+
     def _refresh_status(self) -> None:
         services = self.service_manager.services()
         label, css = _overall_status(services)
         status = self.query_one("#chrome-status", Static)
-        status.update(label)
-        status.set_classes(css)
+        if label != getattr(self, "_last_status_label", None):
+            self._last_status_label = label
+            status.update(label, layout=False)
+        if css != getattr(self, "_last_status_css", None):
+            self._last_status_css = css
+            status.set_classes(css)
         project = self.project_manager.current
         hint = project.name if project else "Switch Project to begin"
         self.query_one(StatusBar).show(services, hint=hint)
@@ -322,18 +418,7 @@ class DevDeskApp(App[None]):
         focused = self.focused
         if isinstance(focused, LogPanel):
             return focused
-        visible = [
-            panel
-            for panel in self.query(LogPanel)
-            if panel.display and panel.parent is not None and getattr(panel.parent, "display", True)
-        ]
-        switcher = self.query_one("#main", ContentSwitcher)
-        current_id = switcher.current
-        if current_id:
-            current = self.query_one(f"#{current_id}")
-            nested = list(current.query(LogPanel))
-            if nested:
-                return nested[0]
+        visible = self._get_visible_log_panels()
         return visible[0] if visible else None
 
     def _selected_service(self) -> Service | None:
@@ -382,9 +467,7 @@ class DevDeskApp(App[None]):
         if panel is None:
             return
         panel.set_follow(True)
-        from textual.widgets import Log
-
-        panel.query_one(Log).scroll_end(animate=False)
+        panel.log_widget.scroll_end(animate=False)
         self.notify("Following latest output")
 
     def action_cycle_dashboard(self, delta: int) -> None:

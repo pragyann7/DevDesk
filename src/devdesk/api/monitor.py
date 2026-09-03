@@ -131,10 +131,17 @@ class ApiMonitor:
         self._events.clear()
 
 
+_HTTP_METHOD_TOKENS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
+
+
 def parse_api_line(line: str, parsers: list[Parser] | None = None) -> dict[str, Any] | None:
     text = line.strip()
     if not text:
         return None
+    if parsers is None:
+        upper = text.upper()
+        if not any(method in upper for method in _HTTP_METHOD_TOKENS):
+            return None
     for parser in parsers if parsers is not None else DEFAULT_PARSERS:
         parsed = parser(text)
         if parsed is not None:

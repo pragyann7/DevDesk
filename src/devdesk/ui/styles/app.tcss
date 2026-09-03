@@ -10,16 +10,21 @@ Screen {
     padding: 0 1;
 }
 
-#chrome-title {
-    text-style: bold;
-    color: #e8eef4;
+#chrome > Vertical {
     width: 1fr;
 }
 
+#chrome-title {
+    text-style: bold;
+    color: #e8eef4;
+}
+
 #chrome-status {
-    width: auto;
+    width: 26;
+    min-width: 26;
     text-style: bold;
     content-align: right middle;
+    text-align: right;
 }
 
 #body {
@@ -28,10 +33,14 @@ Screen {
 
 #sidebar {
     width: 22;
-    min-width: 16;
+    min-width: 22;
+    max-width: 22;
     background: #12181f;
     border-right: solid #2a3540;
     padding: 1 0;
+    overflow-x: hidden;
+    scrollbar-size-horizontal: 0;
+    scrollbar-size-vertical: 1;
 }
 
 .nav-section {
@@ -84,8 +93,47 @@ Screen {
 }
 
 .service-header-status {
-    width: auto;
+    width: 28;
+    min-width: 28;
     content-align: right middle;
+    text-align: right;
+}
+
+#service-controls {
+    width: auto;
+    height: 1;
+    margin-right: 1;
+}
+
+.btn-mini {
+    height: 1;
+    min-width: 6;
+    padding: 0 1;
+    border: none;
+    background: #2a3540;
+    color: #c5ced6;
+    margin: 0;
+}
+
+.btn-mini:hover {
+    background: #3d6f9c;
+    color: #f2f6fa;
+}
+
+.btn-mini:disabled {
+    opacity: 0.3;
+}
+
+#service-start {
+    color: #3dd68c;
+}
+
+#service-stop {
+    color: #ff6b6b;
+}
+
+#service-restart {
+    color: #f0c14b;
 }
 
 .log-body {
@@ -93,6 +141,10 @@ Screen {
     padding: 0 1;
     scrollbar-background: #12181f;
     scrollbar-color: #3d4c5a;
+    scrollbar-size-horizontal: 0;
+    scrollbar-size-vertical: 1;
+    scrollbar-gutter: stable;
+    overflow-x: hidden;
 }
 
 #status-bar {

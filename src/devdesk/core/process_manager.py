@@ -81,6 +81,16 @@ class ProcessManager:
     ) -> int:
         if self.is_running(name):
             raise RuntimeError(f"Service {name!r} is already running.")
+
+        # Prepare environment
+        process_env = os.environ.copy()
+        if env:
+            process_env.update(env)
+
+        # Force Python to flush output immediately (no buffering)
+        process_env["PYTHONUNBUFFERED"] = "1"
+        process_env["FORCE_COLOR"] = "1" # Encourage color output if supported
+
         leftover = self._managed.get(name)
         if leftover is not None:
             wait_tasks = [
@@ -99,13 +109,27 @@ class ProcessManager:
             self._emit_failed(name, message)
             raise FileNotFoundError(message)
 
+        # Resolve executable to an absolute path if it's a relative path
+        # Use .absolute() instead of .resolve() to preserve venv symlinks
+        executable = command[0]
+        if "/" in executable or "\\" in executable:
+            # Try resolving relative to the service directory (CWD)
+            path_rel_to_cwd = (cwd / executable).absolute()
+            if path_rel_to_cwd.exists():
+                command[0] = str(path_rel_to_cwd)
+            else:
+                # Try resolving relative to the project root (where DevDesk started)
+                path_rel_to_root = (Path.cwd() / executable).absolute()
+                if path_rel_to_root.exists():
+                    command[0] = str(path_rel_to_root)
+
         try:
             process = await self._factory(
                 *command,
                 cwd=str(cwd),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=env,
+                env=process_env,
                 start_new_session=True,
             )
         except FileNotFoundError:
@@ -188,6 +212,7 @@ class ProcessManager:
     ) -> None:
         if stream is None:
             return
+        lines_read = 0
         while True:
             chunk = await stream.readline()
             if not chunk:
@@ -195,6 +220,9 @@ class ProcessManager:
             line = chunk.decode("utf-8", errors="replace").rstrip("\r\n")
             if self._on_output:
                 self._on_output(name, stream_name, line, datetime.now())
+            lines_read += 1
+            if lines_read % 50 == 0:
+                await asyncio.sleep(0)
 
     async def _watch_exit(self, name: str, process: asyncio.subprocess.Process) -> None:
         returncode = await process.wait()
