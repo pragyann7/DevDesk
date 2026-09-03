@@ -44,7 +44,8 @@ class SmoothLog(Log):
         width = self.size.width if self.size.width > 0 else 80
         self.virtual_size = Size(width, len(self._lines))
         self.refresh_lines(start_line, len(new_lines))
-        if auto_scroll and not self.is_vertical_scrollbar_grabbed:
+        user_scrolled_away = self.max_scroll_y > 0 and self.scroll_y < (self.max_scroll_y - 1)
+        if auto_scroll and not self.is_vertical_scrollbar_grabbed and not user_scrolled_away:
             self.scroll_end(animate=False, immediate=True, x_axis=False)
         else:
             self.refresh()

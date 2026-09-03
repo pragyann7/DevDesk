@@ -119,6 +119,7 @@ class DevDeskApp(App[None]):
         Binding("r", "restart_selected", "Restart"),
         Binding("s", "stop_selected", "Stop"),
         Binding("c", "clear_logs", "Clear"),
+        Binding("C", "clear_all_logs", "Clear all", key_display="Shift+C"),
         Binding("p", "toggle_pause", "Pause"),
         Binding("l", "follow_logs", "Follow"),
         Binding("left_square_bracket", "cycle_dashboard(-1)", "Prev service"),
@@ -263,6 +264,8 @@ class DevDeskApp(App[None]):
             self.run_worker(self._stop_all(), exclusive=True)
         elif command == "restart_all":
             self.run_worker(self.service_manager.restart_all(), exclusive=True)
+        elif command == "clear_all":
+            self.action_clear_all_logs()
         elif command == "switch_project":
             self._open_switcher()
         elif command == "configure_project":
@@ -491,6 +494,12 @@ class DevDeskApp(App[None]):
             return
         self.log_manager.clear(panel.service_name)
         panel.clear_view()
+
+    def action_clear_all_logs(self) -> None:
+        self.log_manager.clear_all()
+        for panel in self.query(LogPanel):
+            panel.clear_view()
+        self.notify("All logs cleared")
 
     def action_toggle_pause(self) -> None:
         panel = self._selected_panel()

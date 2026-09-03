@@ -16,6 +16,7 @@ _BASE_ACTIONS = [
     ("start_all", "Start All"),
     ("restart_all", "Restart All"),
     ("stop_all", "Stop All"),
+    ("clear_all", "Clear All Logs"),
     ("section:project", "PROJECT"),
     ("switch_project", "Switch Project"),
     ("configure_project", "Configure Project"),

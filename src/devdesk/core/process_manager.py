@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import signal
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -17,6 +18,18 @@ from typing import Literal
 from devdesk.models.process import ProcessInfo
 
 StreamName = Literal["stdout", "stderr"]
+
+# Strip ANSI escape sequences that corrupt the TUI display.
+# Covers: CSI sequences (\x1b[...X), OSC title sequences (\x1b]...\x07 or \x1b]...\x1b\\),
+# cursor / mode sequences (\x1b[?...), and simple two-byte \x1bX escapes.
+_ANSI_RE = re.compile(
+    r"\x1b\].*?(?:\x07|\x1b\\)"   # OSC (e.g. terminal title set)
+    r"|\x1b\[[0-9;?]*[A-Za-z]"    # CSI (colors, cursor movement, erase)
+    r"|\x1b[()][A-Z0-9]"          # Character set selection
+    r"|\x1b[A-Z@-_]"              # Two-byte Fe sequences
+    r"|\x1b"                       # Lone ESC (safety net)
+    r"|\r"                         # Carriage return (progress bar artifacts)
+)
 
 OutputCallback = Callable[[str, StreamName, str, datetime], None]
 ExitCallback = Callable[[str, int], None]
@@ -89,7 +102,12 @@ class ProcessManager:
 
         # Force Python to flush output immediately (no buffering)
         process_env["PYTHONUNBUFFERED"] = "1"
-        process_env["FORCE_COLOR"] = "1" # Encourage color output if supported
+        # Tell child processes they are not connected to a real terminal.
+        # This prevents them from emitting cursor positioning, terminal title,
+        # and other escape sequences that corrupt the TUI display.
+        process_env["TERM"] = "dumb"
+        process_env["CI"] = "true"  # Signal non-interactive session to CLI tools
+        process_env["NO_COLOR"] = "1"  # Suppress color escape sequences
 
         leftover = self._managed.get(name)
         if leftover is not None:
@@ -127,6 +145,7 @@ class ProcessManager:
             process = await self._factory(
                 *command,
                 cwd=str(cwd),
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=process_env,
@@ -218,6 +237,9 @@ class ProcessManager:
             if not chunk:
                 break
             line = chunk.decode("utf-8", errors="replace").rstrip("\r\n")
+            line = _ANSI_RE.sub("", line)
+            if not line:
+                continue
             if self._on_output:
                 self._on_output(name, stream_name, line, datetime.now())
             lines_read += 1
