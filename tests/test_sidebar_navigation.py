@@ -122,3 +122,37 @@ async def test_esc_closes_modal_screen(tmp_path: Path) -> None:
         await pilot.press("escape")
         await pilot.pause()
         assert app.screen is not modal
+
+
+@pytest.mark.asyncio
+async def test_api_detail_modal_shows_and_fetches() -> None:
+    from datetime import datetime
+    from devdesk.api.monitor import ApiRequest
+    from devdesk.ui.screens.api_monitor import ApiRequestDetailScreen
+
+    req = ApiRequest(
+        timestamp=datetime.now(),
+        service="backend",
+        method="GET",
+        endpoint="/api/menu/restaurant/qwerty/",
+        status=200,
+        duration_ms=15.0,
+        raw="GET /api/menu/restaurant/qwerty/ 200",
+    )
+
+    screen = ApiRequestDetailScreen(req, service_port=8000)
+    app = DevDeskApp()
+    async with app.run_test() as pilot:
+        await app.push_screen(screen)
+        await pilot.pause()
+
+        # Check screen rendered properly
+        assert app.screen is screen
+        # Check fetch button exists for GET requests
+        btn = screen.query_one("#btn-fetch-response")
+        assert btn is not None
+
+        # Esc closes modal
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.screen is not screen

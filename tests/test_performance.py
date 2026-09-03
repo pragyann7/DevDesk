@@ -32,6 +32,26 @@ def test_fast_api_parser_skips_non_http() -> None:
     assert res["status"] == 200
 
 
+def test_api_monitor_query_params_and_body_capture() -> None:
+    from devdesk.api.monitor import ApiMonitor
+    monitor = ApiMonitor()
+
+    # GET request with query parameters (GET data)
+    req = monitor.ingest_line("backend", 'GET /api/items?search=shoes&limit=10&page=1 200 12ms')
+    assert req is not None
+    assert req.method == "GET"
+    assert req.query_params == {"search": "shoes", "limit": "10", "page": "1"}
+    assert req.request_body is None  # GET has no body
+
+    # POST request with Python dict or JSON body in logs
+    monitor.ingest_line("backend", "Request body: {'name': 'New Item', 'price': 29.99}")
+    req_post = monitor.ingest_line("backend", 'POST /api/items 201 45ms')
+    assert req_post is not None
+    assert req_post.method == "POST"
+    assert req_post.request_body is not None
+    assert '"name": "New Item"' in req_post.request_body
+
+
 @pytest.mark.asyncio
 async def test_log_panel_max_lines_and_batch_write() -> None:
     class DummyApp(App):

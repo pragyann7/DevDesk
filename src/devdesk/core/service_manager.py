@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Callable
 from datetime import datetime
 
@@ -14,6 +15,11 @@ from devdesk.models.service import Service, ServiceState
 StateCallback = Callable[[Service], None]
 LogCallback = Callable[[str, StreamName, str, datetime], None]
 ErrorCallback = Callable[[Service, str], None]
+
+_PORT_RE = re.compile(
+    r"(?:https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0):|port\s+|listening\s+on\s+(?:.*:)?|:\s*)(\d{2,5})",
+    re.IGNORECASE,
+)
 
 
 class ServiceManager:
@@ -148,6 +154,15 @@ class ServiceManager:
         service = self.get(name)
         if service and service.state == ServiceState.FAILED:
             return
+        if service and service.port is None:
+            m = _PORT_RE.search(line)
+            if m:
+                try:
+                    p = int(m.group(1))
+                    if 1 <= p <= 65535:
+                        service.port = p
+                except ValueError:
+                    pass
         lowered = line.lower()
         if service and ("address already in use" in lowered or "port is already allocated" in lowered):
             service.last_error = f"Port appears to be already in use ({line.strip()})"

@@ -278,3 +278,41 @@ ModalScreen > Vertical {
     color: #e8eef4;
 }
 
+#api-detail-modal {
+    width: 96;
+    max-width: 95%;
+    height: auto;
+    max-height: 90%;
+    background: #141b22;
+    border: solid #3d6f9c;
+    padding: 1 2;
+}
+
+#api-detail-modal > VerticalScroll {
+    height: auto;
+    max-height: 60;
+}
+
+.body-label {
+    color: #4da6ff;
+    text-style: bold;
+    margin-top: 1;
+}
+
+.body-content {
+    color: #a8dcff;
+    background: #0d1117;
+    padding: 1 2;
+    margin: 0 0 1 0;
+    border: solid #2a3540;
+}
+
+#api-detail-actions {
+    height: auto;
+    margin-top: 1;
+    align: right middle;
+}
+
+#api-detail-actions Button {
+    margin-left: 1;
+}

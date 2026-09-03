@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -16,7 +17,8 @@ Parser = Callable[[str], dict[str, Any] | None]
 
 # Uvicorn / Hypercorn / Django: "GET /path HTTP/1.1" 200
 _QUOTED_HTTP = re.compile(
-    rf'"(?P<method>{_METHODS})\s+(?P<path>\S+)\s+HTTP/[\d.]+"\s+(?P<status>\d{{3}})'
+    rf'"(?P<method>{_METHODS})\s+(?P<path>\S+)\s+HTTP/[\d.]+"'\
+    rf'\s+(?P<status>\d{{3}})'
     rf"(?:\s+(?P<bytes>\d+))?(?:\s+(?P<duration>[\d.]+)\s*(?P<unit>ms|s))?",
     re.IGNORECASE,
 )
@@ -66,7 +68,85 @@ def _compact(line: str) -> dict[str, Any] | None:
 DEFAULT_PARSERS: tuple[Parser, ...] = (_quoted_http, _http_line, _compact)
 
 
-@dataclass(frozen=True)
+# ---------------------------------------------------------------------------
+# Body extraction helpers
+# ---------------------------------------------------------------------------
+
+_BODY_WINDOW = 20  # lines to buffer per service for backward lookup
+_MAX_CAPTURE_LINES = 30  # max lines to capture for response body
+
+_BODY_KW_RE = re.compile(
+    r"\b(?:body|payload|data|json)\s*[:=]\s*", re.IGNORECASE
+)
+
+
+def _parse_data_string(text: str) -> str | None:
+    """Parse JSON or Python dict string into a formatted JSON string."""
+    text = text.strip()
+    if not text or text[0] not in ("{", "["):
+        return None
+    try:
+        obj = json.loads(text)
+        return json.dumps(obj, indent=2)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    try:
+        import ast
+        obj = ast.literal_eval(text)
+        if isinstance(obj, (dict, list)):
+            return json.dumps(obj, indent=2, default=str)
+    except Exception:
+        pass
+    return None
+
+
+def _find_json_in_lines(lines: list[str]) -> str | None:
+    """Extract the first valid JSON or dict object/array from a list of log lines."""
+    if not lines:
+        return None
+
+    # Strategy 1: keyword-prefixed inline JSON (e.g. "Request body: {...}")
+    for line in lines:
+        match = _BODY_KW_RE.search(line)
+        if match:
+            rest = line[match.end():].strip()
+            parsed = _parse_data_string(rest)
+            if parsed is not None:
+                return parsed
+
+    # Strategy 2: standalone single-line JSON or dict
+    for line in lines:
+        parsed = _parse_data_string(line)
+        if parsed is not None:
+            return parsed
+
+    # Strategy 3: multi-line block
+    collecting = False
+    collected: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not collecting:
+            if stripped and stripped[0] in ("{", "["):
+                collecting = True
+                collected = [stripped]
+        else:
+            collected.append(stripped)
+            combined = "\n".join(collected)
+            parsed = _parse_data_string(combined)
+            if parsed is not None:
+                return parsed
+            if len(collected) > _MAX_CAPTURE_LINES:
+                collecting = False
+                collected = []
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Data model
+# ---------------------------------------------------------------------------
+
+@dataclass
 class ApiRequest:
     timestamp: datetime
     service: str
@@ -75,6 +155,21 @@ class ApiRequest:
     status: int | None
     duration_ms: float | None
     raw: str
+    request_body: str | None = field(default=None, repr=False)
+    response_body: str | None = field(default=None, repr=False)
+
+    @property
+    def query_params(self) -> dict[str, Any]:
+        """Extract query parameters from the request endpoint URL."""
+        from urllib.parse import parse_qs, urlparse
+        try:
+            parsed = urlparse(self.endpoint)
+            if not parsed.query:
+                return {}
+            qs = parse_qs(parsed.query)
+            return {k: v[0] if len(v) == 1 else v for k, v in qs.items()}
+        except Exception:
+            return {}
 
 
 class ApiMonitor:
@@ -84,6 +179,10 @@ class ApiMonitor:
         self._limit = limit
         self._events: deque[ApiRequest] = deque(maxlen=limit)
         self._parsers: list[Parser] = list(parsers) if parsers is not None else list(DEFAULT_PARSERS)
+        # Body capture state
+        self._line_buffer: dict[str, deque[str]] = {}
+        self._pending: dict[str, ApiRequest] = {}
+        self._capture_buf: dict[str, list[str]] = {}
 
     def add_parser(self, parser: Parser, *, prepend: bool = True) -> None:
         """Register a pluggable line parser. Custom parsers run first by default."""
@@ -93,21 +192,58 @@ class ApiMonitor:
             self._parsers.append(parser)
 
     def ingest_log(self, event: LogEvent) -> ApiRequest | None:
-        parsed = parse_api_line(event.message, parsers=self._parsers)
+        service = event.service
+        line = event.message
+
+        # Accumulate line for pending response-body capture
+        if service in self._pending:
+            cap = self._capture_buf.setdefault(service, [])
+            cap.append(line)
+            if len(cap) >= _MAX_CAPTURE_LINES:
+                self._finalize_capture(service)
+
+        buf = self._line_buffer.setdefault(service, deque(maxlen=_BODY_WINDOW))
+
+        # Try to parse as API request
+        parsed = parse_api_line(line, parsers=self._parsers)
         if parsed is None:
+            buf.append(line)
             return None
+
+        # New API request detected — finalize any previous capture first
+        self._finalize_capture(service)
+
+        # Extract request body from buffered lines *before* this API line
+        request_body = _find_json_in_lines(list(buf))
+
         duration = parsed.get("duration_ms")
         record = ApiRequest(
             timestamp=event.timestamp,
-            service=event.service,
+            service=service,
             method=str(parsed["method"]),
             endpoint=str(parsed["endpoint"]),
             status=parsed["status"] if isinstance(parsed["status"], int) else None,
             duration_ms=float(duration) if isinstance(duration, (int, float)) else None,
-            raw=event.message,
+            raw=line,
+            request_body=request_body,
         )
         self._events.append(record)
+
+        # Start capturing subsequent lines for response body
+        self._pending[service] = record
+        self._capture_buf[service] = []
+
+        buf.append(line)
         return record
+
+    def _finalize_capture(self, service: str) -> None:
+        """Attach captured response body JSON to the pending request."""
+        request = self._pending.pop(service, None)
+        lines = self._capture_buf.pop(service, [])
+        if request is not None and lines:
+            body = _find_json_in_lines(lines)
+            if body:
+                request.response_body = body
 
     def ingest_line(
         self,
@@ -125,10 +261,16 @@ class ApiMonitor:
         )
 
     def requests(self) -> list[ApiRequest]:
+        # Finalize any in-flight captures before returning
+        for service in list(self._pending):
+            self._finalize_capture(service)
         return list(self._events)
 
     def clear(self) -> None:
         self._events.clear()
+        self._line_buffer.clear()
+        self._pending.clear()
+        self._capture_buf.clear()
 
 
 _HTTP_METHOD_TOKENS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
