@@ -43,6 +43,19 @@ Screen {
     scrollbar-size-vertical: 1;
 }
 
+#sidebar:focus {
+    border-right: solid #3d6f9c;
+}
+
+#sidebar:focus .nav-item.--selected {
+    background: #235284;
+    color: #ffffff;
+}
+
+#sidebar:focus .nav-item.--selected .nav-marker {
+    color: #a8dcff;
+}
+
 .nav-section {
     color: #6d7a86;
     text-style: bold;

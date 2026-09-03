@@ -38,6 +38,7 @@ class Sidebar(VerticalScroll):
         Binding("up", "move(-1)", "Up", show=False),
         Binding("down", "move(1)", "Down", show=False),
         Binding("enter", "choose", "Select", show=False),
+        Binding("right", "choose", "Open", show=False),
     ]
 
     def __init__(self) -> None:

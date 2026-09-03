@@ -123,7 +123,7 @@ class DevDeskApp(App[None]):
         Binding("l", "follow_logs", "Follow"),
         Binding("left_square_bracket", "cycle_dashboard(-1)", "Prev service"),
         Binding("right_square_bracket", "cycle_dashboard(1)", "Next service"),
-        Binding("escape", "back", "Back"),
+        Binding("escape", "back", "Back / Sidebar"),
         Binding("tab", "focus_next", "Focus", show=False),
     ]
 
@@ -250,10 +250,12 @@ class DevDeskApp(App[None]):
         command = message.command
         if command in {"dashboard", "backend", "frontend", "api_monitor"}:
             self._show_view(command)
+            self._focus_active_view()
             return
         if command.startswith("svc-"):
             service_name = command.removeprefix("svc-")
             self._show_service(service_name)
+            self._focus_active_view()
             return
         if command == "start_all":
             self.action_start_all()
@@ -283,6 +285,7 @@ class DevDeskApp(App[None]):
         if name == "api_monitor":
             self.query_one(ApiMonitorView).replace_rows(self.api_monitor.requests())
         self._reload_visible_logs()
+        self._focus_active_view()
 
     def _show_service(self, name: str) -> None:
         service = self.service_manager.get(name)
@@ -291,21 +294,25 @@ class DevDeskApp(App[None]):
 
         # If it's the primary frontend/backend, show that view for legacy support
         project = self.project_manager.current
+        top_name, bottom_name = (None, None)
         if project:
-            top, bottom = project.display_pair(0)
-            if top and top.name == name:
-                self._show_view("frontend")
-                return
-            if bottom and bottom.name == name:
-                self._show_view("backend")
-                return
+            top_svc, bottom_svc = project.display_pair(self._dashboard_offset)
+            top_name = top_svc.name if top_svc else None
+            bottom_name = bottom_svc.name if bottom_svc else None
 
-        view = self.query_one(ServiceView)
-        view.bind_service(service)
+        if name == top_name:
+            self._show_view("frontend")
+            return
+        if name == bottom_name:
+            self._show_view("backend")
+            return
+
         self.current_view = f"svc-{name}"
+        self.query_one(ServiceView).bind_service(service)
         self.query_one("#main", ContentSwitcher).current = "service_view"
         self.query_one(Sidebar).highlight(f"svc-{name}")
         self._reload_visible_logs()
+        self._focus_active_view()
 
     def _open_switcher(self) -> None:
         start = self.settings.default_project_directory
@@ -510,12 +517,35 @@ class DevDeskApp(App[None]):
         names = " / ".join(item.name for item in (top, bottom) if item)
         self.notify(f"Dashboard panels: {names}")
 
+    def _focus_active_view(self) -> None:
+        if self.current_view == "api_monitor":
+            self.query_one(ApiMonitorView).table_widget.focus()
+            return
+        panels = self._get_visible_log_panels()
+        if panels:
+            panels[0].focus()
+        else:
+            self.query_one("#main").focus()
+
     def action_back(self) -> None:
         if self.screen is not self.screen_stack[0]:
             self.pop_screen()
             return
+
+        sidebar = self.query_one(Sidebar)
+        is_sidebar_focused = self.focused is sidebar or (
+            self.focused is not None and sidebar in self.focused.ancestors
+        )
+
         if self.current_view != "dashboard":
             self._show_view("dashboard")
+            sidebar.focus()
+            return
+
+        if is_sidebar_focused:
+            self._focus_active_view()
+        else:
+            sidebar.focus()
 
     def action_request_quit(self) -> None:
         running = [item for item in self.service_manager.services() if item.is_active]
