@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 
+from rich.style import Style
 from textual.containers import Vertical
 from textual.geometry import Size
+from textual.strip import Strip
 from textual.widgets import Log
 
 from devdesk.core.log_manager import LogEvent
 from devdesk.models.service import Service
 from devdesk.ui.widgets.service_header import ServiceHeader
+
+_ERROR_LOG_RE = re.compile(
+    r"(?:\b[45]\d{2}\b|\b(?:\w*error|\w*exception|fatal|critical|traceback|failed)\b)",
+    re.IGNORECASE,
+)
 
 
 class SmoothLog(Log):
@@ -19,12 +27,37 @@ class SmoothLog(Log):
     Disables background thread pool worker size calculations that trigger
     delayed width callbacks, horizontal scrollbar pops, and visual jitter.
     Guarantees steady, non-bouncing auto-scrolling pinned to the latest output.
+    Highlights the latest log line with a distinct accent background and bold typography.
     """
 
     def _update_size(self, updates: int, lines: list[str]) -> None:
         # Avoid spawning thread pool workers that fire delayed asynchronous
         # callbacks modifying virtual width and causing horizontal jitter.
         pass
+
+    def _render_line(self, y: int, scroll_x: int, width: int) -> Strip:
+        rich_style = self.rich_style
+        if y >= len(self._lines):
+            return Strip.blank(width, rich_style)
+
+        is_latest = (y == 0)
+        if is_latest:
+            line_str = self._lines[y]
+            is_error = bool(_ERROR_LOG_RE.search(line_str))
+            if is_error:
+                style = Style(color="#ff7b72", bold=True, bgcolor="#321418")
+            else:
+                style = Style(color="#f0f6fc", bold=True, bgcolor="#173151")
+            line = self._render_line_strip(y, style)
+            assert line._cell_length is not None
+            line = line.crop_extend(scroll_x, scroll_x + width, style)
+        else:
+            line = self._render_line_strip(y, rich_style)
+            assert line._cell_length is not None
+            line = line.crop_extend(scroll_x, scroll_x + width, rich_style)
+
+        line = line.apply_offsets(scroll_x, y)
+        return line
 
     def write_lines(
         self,
@@ -37,18 +70,19 @@ class SmoothLog(Log):
             new_lines.extend(line.splitlines())
         if not new_lines:
             return self
-        start_line = len(self._lines)
-        self._lines.extend(new_lines)
+
+        # Newest logs at the top (reverse-chronological, latest stays above)
+        self._lines = list(reversed(new_lines)) + self._lines
         if self.max_lines is not None and len(self._lines) > self.max_lines:
-            self._prune_max_lines()
+            self._lines = self._lines[:self.max_lines]
+
         width = self.size.width if self.size.width > 0 else 80
         self.virtual_size = Size(width, len(self._lines))
-        self.refresh_lines(start_line, len(new_lines))
-        user_scrolled_away = self.max_scroll_y > 0 and self.scroll_y < (self.max_scroll_y - 1)
+        self.refresh()
+
+        user_scrolled_away = self.scroll_y > 0
         if auto_scroll and not self.is_vertical_scrollbar_grabbed and not user_scrolled_away:
-            self.scroll_end(animate=False, immediate=True, x_axis=False)
-        else:
-            self.refresh()
+            self.scroll_to(y=0, animate=False)
         return self
 
 

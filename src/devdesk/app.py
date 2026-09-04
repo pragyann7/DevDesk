@@ -513,7 +513,7 @@ class DevDeskApp(App[None]):
         if panel is None:
             return
         panel.set_follow(True)
-        panel.log_widget.scroll_end(animate=False)
+        panel.log_widget.scroll_to(y=0, animate=False)
         self.notify("Following latest output")
 
     def action_cycle_dashboard(self, delta: int) -> None:

@@ -53,6 +53,75 @@ def test_api_monitor_query_params_and_body_capture() -> None:
 
 
 @pytest.mark.asyncio
+async def test_latest_log_line_highlighting() -> None:
+    class DummyApp(App):
+        def compose(self) -> ComposeResult:
+            yield LogPanel(service_name="backend")
+
+    app = DummyApp()
+    async with app.run_test() as pilot:
+        panel = app.query_one(LogPanel)
+        panel.append_events([
+            LogEvent(datetime.now(), "backend", "stdout", "first log entry"),
+            LogEvent(datetime.now(), "backend", "stdout", "second log entry"),
+        ])
+        await pilot.pause()
+
+        log = panel.log_widget
+        assert log.line_count == 2
+
+        # Line 0 is the latest line (second log entry), should have #173151 background and bold
+        strip0 = log.render_line(0)
+        assert strip0._segments[0].style.bold is True
+        assert strip0._segments[0].style.bgcolor.get_truecolor().hex.lower() == "#173151"
+
+        # Line 1 is the older line (first log entry), should have default style
+        strip1 = log.render_line(1)
+        assert strip1._segments[0].style.bold is not True
+
+        # Now append a third line: stderr but normal INFO output (e.g. Uvicorn/Node writing to stderr)
+        panel.append_events([
+            LogEvent(datetime.now(), "backend", "stderr", "INFO: Application startup complete on port 8000"),
+        ])
+        await pilot.pause()
+
+        # Line 0 is the new latest line (INFO message), should be highlighted with #173151
+        strip0_after = log.render_line(0)
+        assert strip0_after._segments[0].style.bold is True
+        assert strip0_after._segments[0].style.bgcolor.get_truecolor().hex.lower() == "#173151"
+
+        # Line 1 was previous latest, now older -> should not be bold anymore
+        strip1_after = log.render_line(1)
+        assert strip1_after._segments[0].style.bold is not True
+
+        # Now append a line with an HTTP 404 status code
+        panel.append_events([
+            LogEvent(datetime.now(), "backend", "stdout", "GET /api/unknown 404 Not Found 2ms"),
+        ])
+        await pilot.pause()
+
+        # Line 0 is the new latest line with 404 error code -> should have red #321418 background!
+        strip0_404 = log.render_line(0)
+        assert strip0_404._segments[0].style.bold is True
+        assert strip0_404._segments[0].style.bgcolor.get_truecolor().hex.lower() == "#321418"
+
+        # Now append a line with an HTTP 500 status code
+        panel.append_events([
+            LogEvent(datetime.now(), "backend", "stdout", "POST /api/checkout 500 Internal Server Error"),
+        ])
+        await pilot.pause()
+
+        # Line 0 is the new latest line with 500 error code -> should have red #321418 background!
+        strip0_500 = log.render_line(0)
+        assert strip0_500._segments[0].style.bold is True
+        assert strip0_500._segments[0].style.bgcolor.get_truecolor().hex.lower() == "#321418"
+
+        # Line 1 (the 404 line) is now older -> should not be highlighted anymore
+        strip1_prev = log.render_line(1)
+        assert strip1_prev._segments[0].style.bold is not True
+
+
+@pytest.mark.asyncio
 async def test_log_panel_max_lines_and_batch_write() -> None:
     class DummyApp(App):
         def compose(self) -> ComposeResult:
